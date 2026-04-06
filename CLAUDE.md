@@ -1,167 +1,336 @@
-# VybePM — Build Instructions for Claude Code
+# VybePM iOS — Voice Client for VybePM
 
-You are building VybePM, the task orchestration hub for 1000Problems. Read SPEC.md first — it is the source of truth for architecture, data model, API, and UI.
+You are rebuilding the Vybe iOS app as a voice-first client for the VybePM-v2 web API. The user speaks a task, the app parses it with Claude, and POSTs it to VybePM's existing API. That's the core loop.
 
-## Step 0: Repository Setup
+**Do NOT change VybePM-v2 or its API. Only this iOS app adapts.**
 
-This repo (`1000Problems/Vybe`) has an old SwiftUI scaffold that needs to be replaced.
+## What to Delete
 
-1. Delete everything in the repo except `.git/`, `SPEC.md`, and `CLAUDE.md`
-2. Initialize a new Next.js 15 project with TypeScript and App Router
-3. Create `.gitignore` (Node + Next.js defaults, include `.env*.local`)
-4. Commit: "Replace SwiftUI scaffold with Next.js project for VybePM"
-5. Push to main
+Delete everything in the `VybePM/` directory except `Assets.xcassets/`. Start fresh with the files listed below. Keep the `.xcodeproj` — update its file references to match the new source files.
 
-## Step 1: Database & Auth (Phase 1 from SPEC.md)
+## Architecture
 
-1. Install `@neondatabase/serverless`
-2. Create `src/lib/db.ts` — Neon connection helper with parameterized query wrapper
-3. Create `src/lib/auth.ts` — password cookie validation + API key validation middleware. Password check sets HTTP-only cookie for 30 days. API key check via `X-API-Key` header. Either one grants access.
-4. Create `src/lib/types.ts` — TypeScript interfaces for Project, Task, Attachment
-5. Create `migrations/001_init.sql` with the full schema from SPEC.md. **Important:** prefix all tables with `vybepm_` to avoid conflicts on the shared Neon instance (e.g., `vybepm_projects`, `vybepm_tasks`, `vybepm_attachments`)
-6. Create login page at `/login` — single password input, POST to `/api/auth/login`, redirect to `/` on success
-7. Add middleware that checks for valid session cookie or API key on all routes except `/login` and `/api/auth/login`
+```
+User speaks → SpeechService transcribes → Claude parses into structured task →
+App shows confirmation → User taps Send → POST to VybePM-v2 API → Done
+```
 
-## Step 2: Projects & Tasks API (Phase 1 continued)
+Three tabs:
+1. **Record** — voice input (default tab, auto-starts recording)
+2. **Tasks** — read-only task list pulled from VybePM API
+3. **Settings** — API key, base URL config
 
-1. Build all project API routes from SPEC.md:
-   - GET /api/projects (list with task counts)
-   - GET /api/projects/[slug] (single project)
-   - POST /api/projects (create)
-   - PATCH /api/projects/[slug] (update)
-2. Build all task API routes:
-   - GET /api/projects/[slug]/tasks (list with filters: status, assignee)
-   - POST /api/projects/[slug]/tasks (create)
-   - PATCH /api/tasks/[id] (update — enforce state machine transitions)
-   - DELETE /api/tasks/[id] (hard delete for pending only, reject otherwise)
-   - PATCH /api/tasks/[id]/reorder (update sort_order)
-3. Seed data: create entries for all 6 projects with correct details:
-   - ytcombinator: "YouTube keyword research dashboard", ["Next.js", "TypeScript", "Neon"], "1000Problems/ytcombinator", color "#58a6ff"
-   - KitchenInventory: "AI-powered kitchen inventory with voice input", ["Swift", "SwiftUI", "SwiftData"], "1000Problems/KitchenInventory", color "#3fb950"
-   - voiceq-api: "Voice-activated task queue API", ["Next.js", "TypeScript", "Neon"], "1000Problems/voiceq-api", color "#d29922"
-   - GitMCP: "Local MCP server for native git access", ["Node.js", "TypeScript", "MCP"], "1000Problems/GitMCP", color "#f0883e"
-   - VybePM: "Task orchestration hub", ["Next.js", "TypeScript", "Neon"], "1000Problems/Vybe", color "#a371f7"
-   - RubberJoints-iOS: "RubberJoints iOS client", ["Swift", "iOS"], "1000Problems/RubberJoints-iOS", color "#f85149"
-4. Test every endpoint
+## VybePM-v2 API Reference
 
-## Step 3: UI (Phase 1 continued)
+Base URL: `https://vybepm-v2.vercel.app`
+Auth: `X-API-Key` header (stored in Keychain, entered in Settings)
 
-1. Install Tailwind CSS 4
-2. Build the home page (`/`) — project grid with cards per SPEC.md
-3. Build the project view (`/projects/[slug]`) — task sheet grid
-4. Task grid must support:
-   - Inline editing (click cell to edit title, dropdowns for type/status/assignee)
-   - New task row at bottom (always visible, start typing to create)
-   - Status colors as defined in SPEC.md
-   - Completed tasks section at bottom (collapsed by default)
-5. Task detail expansion (click row to expand inline or slide-in panel)
-6. Mobile: task grid becomes card layout on screens < 768px
+### Endpoints Used
 
-## Step 4: Google Drive Integration (Phase 2 from SPEC.md)
+```
+GET /api/projects
+→ Returns: [{ id, name, display_name, color, pending_count, in_progress_count, total_count, ... }]
 
-1. Install `googleapis` package
-2. Create `src/lib/drive.ts`:
-   - Initialize Google Drive client with service account credentials from env vars
-   - `createUploadSession(fileName, mimeType, parentFolderId)` → returns resumable upload URL + file ID
-   - `getFileMetadata(fileId)` → returns URL, thumbnail URL, name, size
-   - `deleteFile(fileId)` → removes file from Drive
-3. Build upload API routes:
-   - POST /api/upload/request — validates file name + MIME type, creates Drive upload session, returns signed URL
-   - POST /api/upload/complete — takes file ID, fetches metadata from Drive, returns full file info
-4. Build attachment API routes:
-   - POST /api/tasks/[id]/attachments — links a Drive file ID to a task
-   - DELETE /api/attachments/[id] — removes attachment record, optionally deletes from Drive
-5. Build `FileUpload.tsx` component:
-   - Drag-and-drop zone
-   - Clipboard paste handler (Cmd+V)
-   - Calls /api/upload/request, uploads to Drive URL, calls /api/upload/complete, then links to task
-   - Shows upload progress bar
-6. Add attachment thumbnails to task rows
-7. Add lightbox for full-size image viewing
+GET /api/projects/{slug}/tasks?status=pending
+→ Returns: [{ id, title, description, task_type, priority, status, assignee, created_at, ... }]
 
-## Step 5: Studio & Quick Add (Phase 3 from SPEC.md)
+POST /api/projects/{slug}/tasks
+→ Body: { "title": string, "description": string?, "task_type": string, "priority": int, "assignee": string }
+→ Returns: created task object
+→ Valid task_type: "dev", "design", "animation", "content", "deploy", "report", "other"
+→ Valid priority: 1 (critical), 2 (high), 3 (medium), 4 (low)
+→ Valid assignee: "angel", "cowork", "claude-code"
 
-1. Build video studio page (`/projects/[slug]/studio`):
-   - Request form: prompt textarea, style dropdown, duration selector, reference image upload
-   - Submit creates a task of type `animation` with assignee `cowork`
-   - Gallery of completed animation tasks below the form
-2. Build quick add page (`/quick`):
-   - Minimal form: project dropdown (pre-filled if `?project=` param), title, type, file upload
-   - Designed for mobile home screen bookmark
-3. Task reordering via drag and drop
-4. Completed tasks collapsible section
+PATCH /api/tasks/{id}
+→ Body: { "status": string }
+→ State machine: pending → in_progress → review → checked_in → deployed → done
+```
 
-## Step 6: Executor API (Phase 4 from SPEC.md)
+## File Structure
 
-1. GET /api/executor/next — returns next pending task assigned to calling executor
-2. PATCH /api/executor/tasks/[id]/pickup — atomic pickup with SELECT FOR UPDATE
-3. PATCH /api/executor/tasks/[id]/complete — set to review, include notes + attachment Drive file IDs
-4. GET /api/digest?since=YYYY-MM-DD — task changes since date, grouped by project
+```
+VybePM/
+  VybePMApp.swift              — App entry point
+  ContentView.swift            — TabView with Record, Tasks, Settings
 
-## Non-Negotiable Rules
+  Models/
+    VybePMProject.swift        — Codable struct matching GET /api/projects response
+    VybePMTask.swift           — Codable struct matching task objects
+    ParsedTask.swift           — Intermediate struct from Claude parsing
 
-- **No ORMs.** Use `sql` tagged templates with @neondatabase/serverless only.
-- **No `any` types.** TypeScript strict mode. Every function, parameter, and return value typed.
-- **No `exec()` or `eval()`.** Never, for any reason.
-- **Validate all inputs server-side.** Every POST/PATCH checks field types, lengths, enum values. Return 400 with clear error message.
-- **Enforce state machine.** Status transitions per SPEC.md. Reject invalid transitions with 400.
-- **Sanitize file names.** Strip special chars, reject executable MIME types (.exe, .sh, .bat, etc).
-- **Parameterized queries only.** Never concatenate user input into SQL strings.
-- **No secrets in code.** DATABASE_URL, VYBEPM_API_KEY, VYBEPM_PASSWORD, GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, GOOGLE_DRIVE_FOLDER_ID all from env vars.
-- **Prefix all tables with `vybepm_`** — shared Neon instance.
-- **Mobile responsive.** Task grid → card layout at < 768px. Quick add page must work well on phone.
+  Services/
+    SpeechService.swift        — Port from KitchenInventory (continuous listening + session chaining)
+    VybePMAPIService.swift     — HTTP client for VybePM-v2 API
+    TaskParserService.swift    — Claude API call that turns transcription into structured task
+    KeychainHelper.swift       — Store API keys securely
+    HapticsHelper.swift        — Haptic feedback
 
-## What NOT To Do
+  Views/
+    Record/
+      RecordTabView.swift      — Main voice input screen (auto-start, transcript, confirm)
+      TaskConfirmView.swift    — Shows parsed task for review before sending
+    Tasks/
+      TasksTabView.swift       — Project picker + task list from API
+      TaskRowView.swift        — Single task row
+    Settings/
+      SettingsView.swift       — API key input, base URL, about
+```
 
-- Do NOT create user accounts or a users table — password gate only
-- Do NOT add WebSocket/real-time features — simple fetch/refetch
-- Do NOT add a sidebar navigation — project grid → project view → back
-- Do NOT use `dangerouslySetInnerHTML`
-- Do NOT add analytics, tracking, or telemetry
-- Do NOT store files in Vercel Blob or locally — all files go to Google Drive
-- Do NOT create separate upload paths for different file sizes — one pipeline for everything
+## Models
 
-## Design Direction
+### VybePMProject.swift
+```swift
+struct VybePMProject: Codable, Identifiable {
+    let id: Int
+    let name: String            // slug used in API paths
+    let display_name: String
+    let color: String?
+    let pending_count: Int
+    let in_progress_count: Int
+    let total_count: Int
+}
+```
 
-- Dark theme by default, no toggle needed
-- Color palette: dark backgrounds (#0e1117, #161b22), muted borders (#30363d), light text (#e6edf3)
-- Each project gets a unique accent color (stored in DB, used for card borders and headers)
-- Typography: system font stack. No custom fonts.
-- Component libraries (shadcn etc) are fine if they speed up the build
-- Dense layout — productivity tool, not marketing site. Maximize information density.
+### VybePMTask.swift
+```swift
+struct VybePMTask: Codable, Identifiable {
+    let id: Int
+    let title: String
+    let description: String?
+    let task_type: String
+    let priority: Int
+    let status: String
+    let assignee: String
+    let created_at: String
+}
+```
+
+### ParsedTask.swift
+```swift
+struct ParsedTask: Identifiable {
+    let id = UUID()
+    var projectSlug: String     // which project this goes to
+    var title: String           // the task title
+    var description: String?    // optional longer description
+    var taskType: String        // dev, design, animation, etc.
+    var priority: Int           // 1-4
+    var assignee: String        // angel, cowork, claude-code
+}
+```
+
+## Services
+
+### SpeechService.swift
+
+Port directly from `/Users/angel/1000Problems/KitchenInventory/KitchenInventory LLM/KitchenInventory LLM/Services/SpeechService.swift`.
+
+Copy it verbatim. The only change: remove the `KitchenError` references and replace with a local `VybePMError` enum:
+
+```swift
+enum VybePMError: LocalizedError {
+    case speechUnavailable
+    case microphoneDenied
+    case networkError(String)
+    case apiError(Int, String)
+    case parseError
+
+    var errorDescription: String? {
+        switch self {
+        case .speechUnavailable: return "Speech recognition is not available"
+        case .microphoneDenied: return "Microphone access is required"
+        case .networkError(let msg): return "Network error: \(msg)"
+        case .apiError(let code, let msg): return "API error \(code): \(msg)"
+        case .parseError: return "Failed to parse response"
+        }
+    }
+}
+```
+
+### VybePMAPIService.swift
+
+Simple HTTP client. All methods take the API key and base URL from Keychain/UserDefaults.
+
+```swift
+final class VybePMAPIService {
+    private var baseURL: String { UserDefaults.standard.string(forKey: "vybepm_base_url") ?? "https://vybepm-v2.vercel.app" }
+    private var apiKey: String? { KeychainHelper.retrieve(.vybepmAPIKey) }
+
+    func fetchProjects() async throws -> [VybePMProject]
+    func fetchTasks(projectSlug: String, status: String?) async throws -> [VybePMTask]
+    func createTask(projectSlug: String, task: ParsedTask) async throws -> VybePMTask
+    func updateTaskStatus(taskId: Int, status: String) async throws -> VybePMTask
+}
+```
+
+Every request adds:
+```
+X-API-Key: {apiKey}
+Content-Type: application/json
+```
+
+`createTask` maps ParsedTask to the POST body:
+```json
+{
+  "title": "{task.title}",
+  "description": "{task.description}",
+  "task_type": "{task.taskType}",
+  "priority": {task.priority},
+  "assignee": "{task.assignee}"
+}
+```
+
+### TaskParserService.swift
+
+Uses the Claude API (same pattern as KitchenInventory's ClaudeAPIService, but simpler — no tool loop, just a single message→response).
+
+Takes the voice transcript + list of project names, returns a `ParsedTask`.
+
+System prompt:
+```
+You are a task parser for VybePM. The user will dictate a task via voice.
+Extract: project (from the list provided), title, description, task_type, priority, assignee.
+
+Available projects: {project_names_list}
+Valid task_type values: dev, design, animation, content, deploy, report, other
+Valid assignee values: angel, cowork, claude-code
+Priority: 1=critical, 2=high (default), 3=medium, 4=low
+
+If the user doesn't specify a project, use the most recently selected project or ask.
+If the user doesn't specify priority, default to 2.
+If the user doesn't specify assignee, default to claude-code.
+If the user doesn't specify task_type, infer from context (bug fix → dev, make a video → animation, etc).
+
+Respond with ONLY valid JSON, no markdown:
+{"project": "slug", "title": "...", "description": "...", "task_type": "...", "priority": 2, "assignee": "claude-code"}
+```
+
+Claude model: `claude-haiku-4-5` (fast, cheap, parsing only).
+API key: Same Anthropic key stored in Keychain.
+
+### KeychainHelper.swift
+
+Port from KitchenInventory. Two keys:
+- `.claudeAPIKey` — Anthropic API key for task parsing
+- `.vybepmAPIKey` — VybePM X-API-Key header value
+
+### HapticsHelper.swift
+
+Port from KitchenInventory. Light tap, success, warning, error.
+
+## Views
+
+### RecordTabView.swift
+
+Port the recording UI from KitchenInventory's `MicTabView.swift`. Changes:
+
+1. **Hints** — Replace kitchen examples with task examples:
+   - "Fix the login bug in YTCombinator"
+   - "Add dark mode to RubberJoints"
+   - "Create an animation for the kids channel"
+
+2. **Post-recording flow** — Instead of parsing into grocery items, parse into a `ParsedTask`:
+   - User taps Done → state goes to `.processing`
+   - Call `TaskParserService.parse(transcript, projects)` → get `ParsedTask`
+   - State goes to `.confirming` → show `TaskConfirmView`
+
+3. **No SwiftData dependency** — This app has no local database. Everything goes to the VybePM API.
+
+### TaskConfirmView.swift
+
+Shows the parsed task for review before sending:
+- Project name (with color dot, tappable to change)
+- Title (editable text field)
+- Task type (picker: dev, design, animation, content, deploy, report, other)
+- Priority (picker: 1-4)
+- Assignee (picker: angel, cowork, claude-code)
+- Description (optional, editable)
+
+Two buttons:
+- **Send** → calls `VybePMAPIService.createTask()`, shows success, returns to Record tab
+- **Cancel** → discards, returns to Record tab
+
+### TasksTabView.swift
+
+Simple read-only view:
+1. Horizontal scrollable project picker at top (colored pills with names, from GET /api/projects)
+2. Task list below, filtered by selected project
+3. Each row shows: priority dot, title, task type badge, status badge, assignee
+4. Pull to refresh
+5. Tapping a task could expand inline to show description — keep it simple
+
+### SettingsView.swift
+
+- Anthropic API Key field (saved to Keychain, masked)
+- VybePM API Key field (saved to Keychain, masked)
+- VybePM Base URL field (saved to UserDefaults, default: https://vybepm-v2.vercel.app)
+- App version / about
+
+## State Management
+
+Use a single `@MainActor` ObservableObject called `AppViewModel`:
+
+```swift
+@MainActor
+final class AppViewModel: ObservableObject {
+    // Voice state (same pattern as KitchenInventory AIViewModel)
+    @Published var voiceSessionState: VoiceSessionState = .idle
+    @Published var voiceTranscript: String = ""
+    @Published var parsedTask: ParsedTask?
+    @Published var voiceError: String?
+
+    // Data from API
+    @Published var projects: [VybePMProject] = []
+    @Published var tasks: [VybePMTask] = []
+    @Published var selectedProjectSlug: String?
+    @Published var lastUsedProjectSlug: String?  // persisted in UserDefaults
+
+    // Services
+    private let speechService = SpeechService()
+    private let apiService = VybePMAPIService()
+    private let taskParser = TaskParserService()
+
+    // Voice mode methods (port from AIViewModel)
+    func enterVoiceMode() { ... }
+    func finishVoiceMode() { ... }  // calls taskParser
+    func cancelVoiceMode() { ... }
+
+    // API methods
+    func loadProjects() async { ... }
+    func loadTasks(for projectSlug: String) async { ... }
+    func sendTask(_ task: ParsedTask) async throws -> VybePMTask { ... }
+}
+```
+
+## Design System
+
+- Light theme by default (match VybePM-v2 web)
+- Accent color: system blue
+- Project colors: use the hex `color` field from the API for project indicators
+- Clean, minimal — productivity tool not a showcase
+- Large tap targets for voice-first use
+- System font stack, no custom fonts
+
+## What NOT to Do
+
+- Do NOT use SwiftData or any local database — all data lives in VybePM API
+- Do NOT add a chat/AI conversation view — this is voice-to-task only
+- Do NOT add file upload or attachments — that's a web feature
+- Do NOT add task editing beyond status changes — edit in the web UI
+- Do NOT store any secrets in code — all keys in Keychain
+- Do NOT add push notifications
+- Do NOT add onboarding flow — just the settings screen for API keys
+
+## Build Configuration
+
+- Deployment target: iOS 17.0
+- Swift 5.9+
+- No external dependencies (no SPM packages) — use Foundation URLSession for networking
+- No CocoaPods, no Carthage
+- Frameworks: AVFoundation, Speech, SwiftUI
 
 ## Commit Strategy
 
-Commit after each major step:
-1. "Replace SwiftUI scaffold with Next.js project"
-2. "Add database schema, migrations, seed data, and auth"
-3. "Add projects API and tasks API with full CRUD"
-4. "Add home page with project grid"
-5. "Add project view with task grid and inline editing"
-6. "Add Google Drive integration and file upload pipeline"
-7. "Add video studio page and quick add"
-8. "Add executor API and digest endpoint"
+Single commit when everything works:
+"VybePM iOS voice client — speak tasks directly into VybePM API"
 
-Push to main after each commit. Vercel auto-deploys.
-
-## Environment Setup
-
-Before starting, confirm these env vars are available (ask the user if not):
-- `DATABASE_URL` — Neon PostgreSQL connection string (shared instance)
-- `VYBEPM_API_KEY` — any secure random string
-- `VYBEPM_PASSWORD` — shared password for web UI access
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL` — from Google Cloud Console
-- `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` — from downloaded JSON key
-- `GOOGLE_DRIVE_FOLDER_ID` — ID of the shared VybePM folder in Drive
-
-Note: Google Drive setup can be deferred to Step 4. Steps 0-3 only need DATABASE_URL, VYBEPM_API_KEY, and VYBEPM_PASSWORD.
-
-## Testing
-
-- Test every API endpoint
-- Verify state machine rejects invalid transitions
-- Verify file upload creates Drive file and returns correct metadata
-- Verify SQL injection is prevented (try `'; DROP TABLE vybepm_tasks; --` in inputs)
-- Verify password gate blocks unauthenticated access
-- Verify mobile layout at 375px width
-- Verify large file upload works (test with a 50MB+ file if possible)
+Push to main.
