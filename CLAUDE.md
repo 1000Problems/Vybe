@@ -4,6 +4,26 @@ You are rebuilding the Vybe iOS app as a voice-first client for the VybePM-v2 we
 
 **Do NOT change VybePM-v2 or its API. Only this iOS app adapts.**
 
+## Before Implementing Any TASK
+
+1. **Read the full TASK spec** — understand scope, acceptance criteria, and the Do Not Change section.
+2. **Query LightRAG** for cross-project context before touching shared patterns:
+   ```bash
+   curl -X POST http://localhost:9621/query \
+     -H "Content-Type: application/json" \
+     -d '{"query": "architectural context for [feature being implemented]", "mode": "hybrid"}'
+   ```
+3. **Stay in scope.** Only modify files and components explicitly listed in the TASK spec. If you discover something that needs changing outside the spec, create a new VybePM task — do NOT fix it inline.
+4. **Verify before committing.** Build in Xcode (Cmd+B), confirm zero warnings, and check that nothing outside the TASK scope changed with `git diff`.
+
+### Protected Areas (global — TASK specs may add more)
+
+These components are stable and must NOT be modified unless the TASK spec explicitly names them:
+
+- `Services/SpeechService.swift` — Ported from KitchenInventory, proven working.
+- `Services/KeychainHelper.swift` — Keychain storage for API keys.
+- VybePM-v2 API contract — this app consumes the API, it does NOT change it.
+
 ## What to Delete
 
 Delete everything in the `VybePM/` directory except `Assets.xcassets/`. Start fresh with the files listed below. Keep the `.xcodeproj` — update its file references to match the new source files.
